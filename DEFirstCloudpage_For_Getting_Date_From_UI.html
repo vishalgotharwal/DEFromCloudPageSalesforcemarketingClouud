@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DE Creator Configuration</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f9; margin: 40px; color: #333; }
+        .container { max-width: 700px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h2 { border-bottom: 2px solid #0077be; padding-bottom: 10px; color: #0077be; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        
+        .field-entry { background: #fdfdfd; border: 1px dashed #bbb; padding: 15px; margin-bottom: 15px; border-radius: 6px; position: relative; }
+        .field-grid { display: grid; grid-template-columns: 2fr 1.5fr 1fr; gap: 10px; align-items: end; }
+        
+        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.3s; }
+        .btn-add { background-color: #28a745; color: white; margin-bottom: 20px; }
+        .btn-add:hover { background-color: #218838; }
+        .btn-submit { background-color: #0077be; color: white; width: 100%; font-size: 1.1em; }
+        .btn-submit:hover { background-color: #005a9e; }
+        .remove-btn { color: #dc3545; cursor: pointer; font-size: 0.8em; text-decoration: underline; display: block; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Data Extension Setup</h2>
+    
+    <div class="form-group">
+        <label for="deName">Data Extension Name</label>
+        <input type="text" id="deName" placeholder="e.g. Master_Subscriber_DE">
+    </div>
+
+    <div id="fieldsContainer">
+        <label>Fields Configuration</label>
+        </div>
+
+    <button type="button" class="btn btn-add" onclick="addField()">+ Add Field</button>
+    <button type="button" class="btn btn-submit" onclick="compileAndSend()">Generate & Create DE</button>
+</div>
+
+<script>
+    // Initial Field
+    window.onload = function() { addField(); };
+
+    function addField() {
+        const container = document.getElementById('fieldsContainer');
+        const fieldDiv = document.createElement('div');
+        fieldDiv.className = 'field-entry';
+        fieldDiv.innerHTML = `
+            <div class="field-grid">
+                <div>
+                    <label style="font-size: 0.8em;">Field Name</label>
+                    <input type="text" class="f-name" placeholder="e.g. FirstName">
+                </div>
+                <div>
+                    <label style="font-size: 0.8em;">Type</label>
+                    <select class="f-type">
+                        <option value="Text">Text</option>
+                        <option value="Number">Number</option>
+                        <option value="EmailAddress">Email</option>
+                        <option value="Boolean">Boolean</option>
+                        <option value="Date">Date</option>
+                    </select>
+                </div>
+                <div style="text-align: center;">
+                    <label style="font-size: 0.8em;">Primary Key</label><br>
+                    <input type="checkbox" class="f-pk">
+                </div>
+            </div>
+            <span class="remove-btn" onclick="this.parentElement.remove()">Remove Field</span>
+        `;
+        container.appendChild(fieldDiv);
+    }
+
+    function compileAndSend() {
+        const deName = document.getElementById('deName').value;
+        if (!deName) { alert("Please enter a DE Name"); return; }
+
+        const fields = [];
+        const entries = document.querySelectorAll('.field-entry');
+        
+        entries.forEach(entry => {
+            const name = entry.querySelector('.f-name').value;
+            if (name) {
+                fields.push({
+                    name: name,
+                    type: entry.querySelector('.f-type').value,
+                    isPrimaryKey: entry.querySelector('.f-pk').checked,
+                    isRequired: entry.querySelector('.f-pk').checked, // PKs must be required
+                    maxLength: 255
+                });
+            }
+        });
+
+        if (fields.length === 0) { alert("Please add at least one field."); return; }
+
+        // 1. Create the JSON Object
+        const payload = {
+            deName: deName,
+            fields: fields
+        };
+
+        // 2. Stringify and Encode to Base64 (UTF-8 safe)
+        const jsonString = JSON.stringify(payload);
+        const base64Data = btoa(encodeURIComponent(jsonString).replace(/%([0-9A-F]{2})/g, (match, p1) => {
+            return String.fromCharCode('0x' + p1);
+        }));
+
+        // 3. Define your Processing CloudPage URL
+        // Replace this with your actual CloudPage URL
+        const targetUrl = "https://mc6vgk-sxj9p08pqwxqz9hw9-4my.pub.sfmc-content.com/sffzftelosj";
+        
+        // 4. Append the "data" parameter and redirect
+        const separator = targetUrl.indexOf('?') !== -1 ? "&" : "?";
+        const finalUrl = targetUrl + separator + "data=" + encodeURIComponent(base64Data);
+        
+        window.location.href = finalUrl;
+    }
+</script>
+
+</body>
+</html>
