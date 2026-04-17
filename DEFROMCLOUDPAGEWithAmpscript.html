@@ -1,0 +1,265 @@
+%%[
+VAR @dename
+]%%
+
+<script runat="server">
+Platform.Load("Core", "1.1.1");
+
+
+var categoryId = 110051;
+
+/* ===============================
+   READ & DECODE DATA FROM URL
+================================ */
+var encodedData = Platform.Request.GetQueryStringParameter("data");
+
+if (!encodedData || encodedData == "") {
+    Write("<div style='color:red;font-weight:bold;'>❌ No data received. Please go back and submit again.</div>");
+    return;
+}
+
+var decodedData = "";
+var payload     = null;
+var deName      = "";
+var fields      = [];
+
+try {
+    decodedData = Platform.Function.Base64Decode(encodedData);
+} catch(ex) {
+    Write("<div style='color:red;'>❌ Base64 decode failed: " + ex.message + "</div>");
+    return;
+}
+
+try {
+    payload = Platform.Function.ParseJSON(decodedData);
+} catch(ex) {
+    Write("<div style='color:red;'>❌ JSON parse failed: " + ex.message + "</div>");
+    Write("<pre>Raw decoded: " + decodedData + "</pre>");
+    return;
+}
+
+/* Extract DE Name */
+if (payload && payload.deName && payload.deName != "") {
+    deName = payload.deName;
+    deName = deName.replace(/[^a-zA-Z0-9 _\-]/g, "").replace(/^\s+|\s+$/g, "");
+} else {
+    Write("<div style='color:red;'>❌ DE Name missing in payload.</div>");
+    return;
+}
+
+if (deName == "") {
+    Write("<div style='color:red;'>❌ DE Name is empty after sanitization.</div>");
+    return;
+}
+
+/* Extract Fields */
+try {
+    if (payload.fieldsJson && payload.fieldsJson != "") {
+        fields = Platform.Function.ParseJSON(payload.fieldsJson);
+    } else if (payload.fields) {
+        fields = payload.fields;
+    }
+} catch(ex) {
+    Write("<div style='color:red;'>❌ Failed to parse fields: " + ex.message + "</div>");
+    return;
+}
+
+if (!fields || fields.length === 0) {
+    Write("<div style='color:red;'>❌ No fields received.</div>");
+    return;
+}
+
+Variable.SetValue("@dename", deName);
+
+/* ===============================
+   DEBUG OUTPUT
+================================ */
+Write("<h3>📋 Received Data</h3>");
+Write("<p><strong>DE Name:</strong> " + deName + "</p>");
+Write("<table border='1' cellpadding='6' cellspacing='0' style='border-collapse:collapse;width:100%;'>");
+Write("<tr style='background:#333;color:#fff;'><th>Name</th><th>Type</th><th>MaxLength</th><th>Required</th><th>Primary Key</th></tr>");
+for (var i = 0; i < fields.length; i++) {
+    Write("<tr>");
+    Write("<td>" + (fields[i].name         || "N/A")   + "</td>");
+    Write("<td>" + (fields[i].type         || "Text")  + "</td>");
+    Write("<td>" + (fields[i].maxLength    || "-")     + "</td>");
+    Write("<td>" + (fields[i].isRequired   || "false") + "</td>");
+    Write("<td>" + (fields[i].isPrimaryKey || "false") + "</td>");
+    Write("</tr>");
+}
+Write("</table><br>");
+
+/* ===============================
+   MAP FIELD TYPES (WSProxy uses these exact strings)
+================================ */
+function mapFieldType(rawType) {
+    if (!rawType) return "Text";
+    var t = rawType.toLowerCase().replace(/^\s+|\s+$/g, "");
+    if (t === "email"   || t === "emailaddress") return "EmailAddress";
+    if (t === "number"  || t === "numeric")      return "Number";
+    if (t === "date")                            return "Date";
+    if (t === "boolean" || t === "bool")         return "Boolean";
+    if (t === "phone")                           return "Phone";
+    if (t === "decimal")                         return "Decimal";
+    if (t === "locale")                          return "Locale";
+    return "Text";
+}
+
+/* ===============================
+   BUILD FIELDS FOR WSPROXY
+   ⚠️ WSProxy requires PascalCase keys
+================================ */
+var fieldArray = [];
+
+/* SubscriberKey — always first, always primary key */
+fieldArray.push({
+    "Name"        : "SubscriberKey",
+    "FieldType"   : "Text",
+    "MaxLength"   : 254,
+    "IsPrimaryKey": true,
+    "IsRequired"  : true
+});
+
+/* Dynamic fields from Page 1 */
+for (var j = 0; j < fields.length; j++) {
+    var f = fields[j];
+
+    /* Sanitize field name */
+    var fieldName = (f.name || "").replace(/[^a-zA-Z0-9 _\-]/g, "").replace(/^\s+|\s+$/g, "");
+    if (!fieldName || fieldName == "") continue;
+
+    /* Skip duplicate SubscriberKey */
+    if (fieldName.toLowerCase() === "subscriberkey") continue;
+
+    var mappedType = mapFieldType(f.type);
+
+    var isPK  = (f.isPrimaryKey === true || f.isPrimaryKey === "true") ? true : false;
+    var isReq = (f.isRequired   === true || f.isRequired   === "true") ? true : false;
+
+    var fieldObj = {
+        "Name"        : fieldName,
+        "FieldType"   : mappedType,
+        "IsPrimaryKey": isPK,
+        "IsRequired"  : isReq
+    };
+
+    /* MaxLength only for text-based types */
+    if (mappedType === "Text" || mappedType === "EmailAddress" || mappedType === "Phone") {
+        fieldObj.MaxLength = (f.maxLength && parseInt(f.maxLength) > 0)
+                              ? parseInt(f.maxLength)
+                              : 255;
+    }
+
+    /* DefaultValue if provided */
+    if (f.defaultValue && f.defaultValue != "") {
+        fieldObj.DefaultValue = String(f.defaultValue);
+    }
+
+    fieldArray.push(fieldObj);
+}
+
+/* ===============================
+   BUILD DE OBJECT FOR WSPROXY
+================================ */
+var deKey = deName.replace(/ /g, "_"); /* Keys cannot have spaces */
+
+var deObject = {
+    "Name"       : deName,
+    "CustomerKey": deKey,
+    "CategoryID" : categoryId,
+    "IsSendable" : true,
+    "IsTestable" : false,
+    "Fields"     : fieldArray,
+    "SendableDataExtensionField": {
+        "Name"     : "SubscriberKey",
+        "FieldType": "Text"
+    },
+    "SendableSubscriberField": {
+        "Name": "Subscriber Key"  /* ✅ With space — correct for WSProxy/SOAP */
+    }
+};
+
+Write("<h3>📦 DE Object Being Sent to WSProxy:</h3>");
+Write("<pre>" + Stringify(deObject) + "</pre>");
+
+/* ===============================
+   CREATE DE USING WSPROXY
+   No HTTP calls, no token needed
+   Uses current SFMC session auth
+================================ */
+Write("<h3>🚀 Creating Data Extension via WSProxy...</h3>");
+
+try {
+    var proxy = new Script.Util.WSProxy();
+
+    /* Set MID context if needed */
+    proxy.setClientId({ "ID": Platform.Function.AuthenticatedMemberID() });
+
+    var createResult = proxy.createItem("DataExtension", deObject);
+
+    Write("<h3>📬 WSProxy Raw Result:</h3>");
+    Write("<pre>" + Stringify(createResult) + "</pre>");
+
+    /* ---- Handle Result ---- */
+    if (createResult && createResult.Status) {
+        var status = String(createResult.Status).toUpperCase();
+
+        if (status === "OK") {
+            Write("<div style='color:green;font-size:16px;padding:14px;background:#e6ffe6;border-radius:6px;margin-top:10px;'>✅ SUCCESS! Data Extension <strong>" + deName + "</strong> has been created!</div>");
+
+            /* Show new DE key if returned */
+            if (createResult.Results && createResult.Results.length > 0) {
+                var newKey = createResult.Results[0].Object
+                           ? createResult.Results[0].Object.CustomerKey
+                           : deKey;
+                Write("<p><strong>DE Key:</strong> " + newKey + "</p>");
+                Write("<p><strong>Category ID:</strong> " + categoryId + "</p>");
+            }
+        }
+        else if (status === "ERROR" || status === "HAS ERRORS") {
+            Write("<div style='color:red;font-size:15px;padding:14px;background:#ffe6e6;border-radius:6px;margin-top:10px;'>❌ Error creating Data Extension.</div>");
+
+            if (createResult.Results && createResult.Results.length > 0) {
+                for (var k = 0; k < createResult.Results.length; k++) {
+                    var r = createResult.Results[k];
+                    Write("<p><strong>Error " + (k+1) + ":</strong> " + (r.StatusMessage || "Unknown") + " | Code: " + (r.ErrorCode || "N/A") + "</p>");
+                }
+            } else {
+                Write("<p>" + (createResult.StatusMessage || "No details available.") + "</p>");
+            }
+        }
+        else {
+            Write("<div style='color:orange;padding:12px;background:#fff3cd;border-radius:6px;'>⚠️ Unexpected status: " + createResult.Status + "</div>");
+        }
+    } else {
+        Write("<div style='color:orange;padding:12px;background:#fff3cd;border-radius:6px;'>⚠️ No status returned from WSProxy. Check raw result above.</div>");
+    }
+
+} catch(ex) {
+    Write("<div style='color:red;padding:14px;background:#ffe6e6;border-radius:6px;'>❌ WSProxy Exception: " + ex.message + "</div>");
+    if (ex.stack) {
+        Write("<pre>" + ex.stack + "</pre>");
+    }
+}
+</script>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DE Creator - Result</title>
+    <style>
+        body  { font-family: Arial, sans-serif; padding: 20px; max-width: 960px; margin: auto; background: #fafafa; }
+        pre   { background: #f4f4f4; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
+        h3    { margin-top: 25px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 15px; }
+        th    { background: #333; color: #fff; padding: 8px; text-align: left; }
+        td    { padding: 6px 10px; border: 1px solid #ddd; }
+        tr:nth-child(even) { background: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>📊 Data Extension Creator</h1>
+    <p><strong>DE Name:</strong> %%=v(@dename)=%%</p>
+    <hr>
+</body>
+</html>
